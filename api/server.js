@@ -4,6 +4,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   generateRegistrationOptions, verifyRegistrationResponse,
   generateAuthenticationOptions, verifyAuthenticationResponse
@@ -18,6 +19,7 @@ import { initializePersistence } from './persistence.js';
 await initializePersistence();
 
 const PORT = +(process.env.PORT || 3000);
+const STATIC_DIR = process.env.STATIC_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../frontend/dist');
 const DATA = process.env.DATA_DIR || '/data';
 const RP_ID = process.env.RP_ID || 'localhost';
 const ORIGIN = process.env.ORIGIN || 'http://localhost:8080';
@@ -585,11 +587,63 @@ coachJobs.setProposalHook((uid, pending) => {
 });
 startCadence({ users: () => db.users, userNow });
 
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+  '.webmanifest': 'application/manifest+json'
+};
+
+function serveStatic(req, res, pathname) {
+  if (!['GET', 'HEAD'].includes(req.method)) return false;
+  if (!fs.existsSync(STATIC_DIR)) return false;
+
+  let rel;
+  try { rel = decodeURIComponent(pathname); } catch { rel = '/'; }
+  rel = rel.replace(/^\/+/, '');
+  let candidate = path.resolve(STATIC_DIR, rel || 'index.html');
+  const root = path.resolve(STATIC_DIR);
+  if (candidate !== root && !candidate.startsWith(root + path.sep)) return false;
+
+  let file = candidate;
+  try {
+    if (!fs.statSync(file).isFile()) file = path.join(root, 'index.html');
+  } catch {
+    file = path.join(root, 'index.html');
+  }
+  if (!fs.existsSync(file)) return false;
+
+  const ext = path.extname(file).toLowerCase();
+  const isIndex = path.basename(file) === 'index.html';
+  const isSw = path.basename(file) === 'sw.js';
+  res.writeHead(200, {
+    'Content-Type': MIME[ext] || 'application/octet-stream',
+    'Cache-Control': isIndex || isSw ? 'no-cache' : 'public, max-age=31536000, immutable'
+  });
+  if (req.method === 'HEAD') return res.end();
+  fs.createReadStream(file).pipe(res);
+  return true;
+}
+
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const key = req.method + ' ' + url.pathname;
   const handler = routes[key];
-  if (!handler) return json(res, 404, { error: 'not found' });
+  if (!handler) {
+    if (!url.pathname.startsWith('/api/') && serveStatic(req, res, url.pathname)) return;
+    return json(res, 404, { error: 'not found' });
+  }
   try { await handler(req, res); }
   catch (e) {
     console.error(key, e);
