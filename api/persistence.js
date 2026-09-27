@@ -34,12 +34,26 @@ async function call(body) {
   return res.json();
 }
 
+function isPersistentPath(rel) {
+  return rel === 'secret' ||
+    rel === 'db.json' ||
+    rel === 'vapid.json' ||
+    rel === 'coach.json' ||
+    /^state-[a-zA-Z0-9_-]+\.json$/.test(rel) ||
+    /^coach\/[a-zA-Z0-9_-]+\.json$/.test(rel) ||
+    rel === 'codex/auth.json' ||
+    rel === 'codex/config.toml';
+}
+
 function walk(dir, base = dir, out = []) {
   if (!fs.existsSync(dir)) return out;
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, ent.name);
     if (ent.isDirectory()) walk(full, base, out);
-    else if (ent.isFile() && !ent.name.endsWith('.tmp')) out.push(full);
+    else if (ent.isFile() && !ent.name.endsWith('.tmp')) {
+      const rel = safeRel(path.relative(base, full));
+      if (rel && isPersistentPath(rel)) out.push(full);
+    }
   }
   return out;
 }
@@ -55,7 +69,7 @@ async function restoreRemote() {
 
   for (const obj of objects) {
     const rel = safeRel(String(obj.path || ''));
-    if (!rel) continue;
+    if (!rel || !isPersistentPath(rel)) continue;
     const full = path.join(DATA, rel);
     if (!full.startsWith(path.resolve(DATA) + path.sep) && full !== path.resolve(DATA)) continue;
     fs.mkdirSync(path.dirname(full), { recursive: true });
